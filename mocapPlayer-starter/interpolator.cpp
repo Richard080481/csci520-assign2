@@ -103,7 +103,27 @@ void Interpolator::Rotation2Euler(double R[9], double angles[3])
 
 void Interpolator::Euler2Rotation(double angles[3], double R[9])
 {
-  // students should implement this
+    // angles[0] = theta1 (X), angles[1] = theta2 (Y), angles[2] = theta3 (Z)
+    double t1 = angles[0] * M_PI / 180.0;
+    double t2 = angles[1] * M_PI / 180.0;
+    double t3 = angles[2] * M_PI / 180.0;
+
+    double c1 = cos(t1), s1 = sin(t1);
+    double c2 = cos(t2), s2 = sin(t2);
+    double c3 = cos(t3), s3 = sin(t3);
+
+
+    R[0] = c2 * c3;
+    R[1] = s1 * s2 * c3 - c1 * s3;
+    R[2] = c1 * s2 * c3 + s1 * s3;
+
+    R[3] = c2 * s3;
+    R[4] = s1 * s2 * s3 + c1 * c3;
+    R[5] = c1 * s2 * s3 - s1 * c3;
+
+    R[6] = -s2;
+    R[7] = s1 * c2;
+    R[8] = c1 * c2;
 }
 
 void Interpolator::BezierInterpolationEuler(Motion * pInputMotion, Motion * pOutputMotion, int N)
@@ -123,19 +143,52 @@ void Interpolator::BezierInterpolationQuaternion(Motion * pInputMotion, Motion *
 
 void Interpolator::Euler2Quaternion(double angles[3], Quaternion<double> & q) 
 {
-  // students should implement this
+  double R[9];
+  Euler2Rotation(angles, R);
+  q = Quaternion<double>::Matrix2Quaternion(R);
 }
 
 void Interpolator::Quaternion2Euler(Quaternion<double> & q, double angles[3]) 
 {
-  // students should implement this
+	double R[9];
+	q.Quaternion2Matrix(R);
+	Rotation2Euler(R, angles);
 }
 
 Quaternion<double> Interpolator::Slerp(double t, Quaternion<double> & qStart, Quaternion<double> & qEnd_)
 {
-  // students should implement this
-  Quaternion<double> result;
-  return result;
+    double cosTheta = qStart.Gets() * qEnd_.Gets() + 
+                      qStart.Getx() * qEnd_.Getx() + 
+                      qStart.Gety() * qEnd_.Gety() + 
+                      qStart.Getz() * qEnd_.Getz();
+
+    Quaternion<double> qEnd = qEnd_;
+
+    if (cosTheta < 0.0) 
+    {
+        qEnd = -1.0 * qEnd_;
+        cosTheta = -cosTheta;
+    }
+
+    Quaternion<double> result;
+
+    if (cosTheta > 0.9999)
+    {
+        result = (1.0 - t) * qStart + t * qEnd;
+        result.Normalize();
+    }
+    else 
+    {
+        double theta = acos(cosTheta);
+        double sinTheta = sin(theta);
+        
+        double weightStart = sin((1.0 - t) * theta) / sinTheta;
+        double weightEnd = sin(t * theta) / sinTheta;
+
+        result = weightStart * qStart + weightEnd * qEnd;
+    }
+
+    return result;
 }
 
 Quaternion<double> Interpolator::Double(Quaternion<double> p, Quaternion<double> q)
