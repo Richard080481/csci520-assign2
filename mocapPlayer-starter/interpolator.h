@@ -1,6 +1,6 @@
 /*
   interpolator.h
-  
+
   Create interpolated motion.
 
   Revision 1 - Alla and Kiran, Jan 18, 2002
@@ -24,9 +24,12 @@ enum AngleRepresentation
   EULER = 0, QUATERNION = 1
 };
 
+// linear interpolation
+static vector Lerp(double t, const vector& a, const vector& b);
+
 class Interpolator
 {
-public: 
+public:
   //constructor, destructor
   Interpolator();
   ~Interpolator();
@@ -47,8 +50,8 @@ protected:
   // angles are given in degrees; assume XYZ Euler angle order
   void Rotation2Euler(double R[9], double angles[3]);
   void Euler2Rotation(double angles[3], double R[9]);
-  void Euler2Quaternion(double angles[3], Quaternion<double> & q); 
-  void Quaternion2Euler(Quaternion<double> & q, double angles[3]); 
+  void Euler2Quaternion(double angles[3], Quaternion<double> & q);
+  void Quaternion2Euler(Quaternion<double> & q, double angles[3]);
 
   // quaternion interpolation
   Quaternion<double> Slerp(double t, Quaternion<double> & qStart, Quaternion<double> & qEnd);
