@@ -108,7 +108,7 @@ void Interpolator::Rotation2Euler(double R[9], double angles[3])
     angles[i] *= 180 / M_PI;
 }
 
-void Interpolator::Euler2Rotation(double angles[3], double R[9])
+void Interpolator::Euler2Rotation(const double angles[3], double R[9])
 {
     // angles[0] = theta1 (X), angles[1] = theta2 (Y), angles[2] = theta3 (Z)
     double t1 = angles[0] * M_PI / 180.0;
@@ -135,22 +135,45 @@ void Interpolator::Euler2Rotation(double angles[3], double R[9])
 
 ///@note We don't use the entire Posture struct for interpolation, since bone_translation and bone_length are unused.
 ///      We create a reduced posture struct that only contains what we need for interpolation.
-struct ReducedPosture {
+struct ReducedPostureEuler
+{
     vector root_pos;
     vector bone_rotation[MAX_BONES_IN_ASF_FILE];
 
-    ReducedPosture(const Posture& p) {
+    ReducedPostureEuler(const Posture& p) {
         root_pos = p.root_pos;
         std::copy(std::begin(p.bone_rotation), std::end(p.bone_rotation), std::begin(bone_rotation));
     }
 
-    ReducedPosture() = default;
+    ReducedPostureEuler() = default;
 
-    static ReducedPosture Lerp(double t, const ReducedPosture& start, const ReducedPosture& end) {
-        ReducedPosture res;
-        res.root_pos = ::Lerp(t, start.root_pos, end.root_pos);
+    static ReducedPostureEuler Interpolate(double t, const ReducedPostureEuler& start, const ReducedPostureEuler& end) {
+        ReducedPostureEuler res;
+        res.root_pos = Interpolator::Lerp(t, start.root_pos, end.root_pos);
         for (int i = 0; i < MAX_BONES_IN_ASF_FILE; ++i) {
-            res.bone_rotation[i] = ::Lerp(t, start.bone_rotation[i], end.bone_rotation[i]);
+            res.bone_rotation[i] = Interpolator::Lerp(t, start.bone_rotation[i], end.bone_rotation[i]);
+        }
+        return res;
+    }
+};
+
+struct ReducedPostureQuaternion
+{
+    vector root_pos;
+    vector bone_rotation[MAX_BONES_IN_ASF_FILE];
+
+    ReducedPostureQuaternion(const Posture& p) {
+        root_pos = p.root_pos;
+        std::copy(std::begin(p.bone_rotation), std::end(p.bone_rotation), std::begin(bone_rotation));
+    }
+
+    ReducedPostureQuaternion() = default;
+
+    static ReducedPostureQuaternion Interpolate(double t, const ReducedPostureQuaternion& start, const ReducedPostureQuaternion& end) {
+        ReducedPostureQuaternion res;
+        res.root_pos = Interpolator::Lerp(t, start.root_pos, end.root_pos);
+        for (int i = 0; i < MAX_BONES_IN_ASF_FILE; ++i) {
+            res.bone_rotation[i] = Interpolator::Slerp(t, start.bone_rotation[i], end.bone_rotation[i]);
         }
         return res;
     }
@@ -163,7 +186,7 @@ void Interpolator::BezierInterpolationEuler(Motion * pInputMotion, Motion * pOut
     const int numKeyFrames = (inputLength / step) + 1;
 
     // prepare reduced posture for key frames
-    std::vector<ReducedPosture> keyFrames;
+    std::vector<ReducedPostureEuler> keyFrames;
     keyFrames.reserve(numKeyFrames);
 
     for (int i = 0; i < numKeyFrames; ++i)
@@ -174,8 +197,8 @@ void Interpolator::BezierInterpolationEuler(Motion * pInputMotion, Motion * pOut
     // calculate Control points
     struct ControlPoint
     {
-        ReducedPosture a;
-        ReducedPosture b;
+        ReducedPostureEuler a;
+        ReducedPostureEuler b;
     };
 
     std::vector<ControlPoint> controlPoints;
@@ -190,13 +213,13 @@ void Interpolator::BezierInterpolationEuler(Motion * pInputMotion, Motion * pOut
             const auto& q0 = keyFrames[0];
             const auto& q1 = keyFrames[1];
             const auto& q2 = keyFrames[2];
-            cp.a = ReducedPosture::Lerp(oneThird, q0, ReducedPosture::Lerp(2.0, q2, q1));
+            cp.a = ReducedPostureEuler::Interpolate(oneThird, q0, ReducedPostureEuler::Interpolate(2.0, q2, q1));
         }
         else if (i == numKeyFrames - 1) {
             const auto& qn = keyFrames[i];
             const auto& qn_1 = keyFrames[i - 1];
             const auto& qn_2 = keyFrames[i - 2];
-            cp.b = ReducedPosture::Lerp(oneThird, qn, ReducedPosture::Lerp(2.0, qn_2, qn_1));
+            cp.b = ReducedPostureEuler::Interpolate(oneThird, qn, ReducedPostureEuler::Interpolate(2.0, qn_2, qn_1));
         }
         else {
             const auto& q_prev = keyFrames[i - 1];
@@ -204,10 +227,10 @@ void Interpolator::BezierInterpolationEuler(Motion * pInputMotion, Motion * pOut
             const auto& q_next = keyFrames[i + 1];
 
             // a_bar = (1 - 0.5) * (q_curr + (q_curr - q_prev)) + 0.5 * q_next
-            ReducedPosture a_bar = ReducedPosture::Lerp(0.5, ReducedPosture::Lerp(2.0, q_prev, q_curr), q_next);
+            ReducedPostureEuler a_bar = ReducedPostureEuler::Interpolate(0.5, ReducedPostureEuler::Interpolate(2.0, q_prev, q_curr), q_next);
 
-            cp.a = ReducedPosture::Lerp(oneThird, q_curr, a_bar);
-            cp.b = ReducedPosture::Lerp(-oneThird, q_curr, a_bar);
+            cp.a = ReducedPostureEuler::Interpolate(oneThird, q_curr, a_bar);
+            cp.b = ReducedPostureEuler::Interpolate(-oneThird, q_curr, a_bar);
         }
         controlPoints.push_back(std::move(cp));
     }
@@ -313,14 +336,116 @@ void Interpolator::LinearInterpolationQuaternion(Motion * pInputMotion, Motion *
 
 void Interpolator::BezierInterpolationQuaternion(Motion * pInputMotion, Motion * pOutputMotion, int N)
 {
-  // students should implement this
+    const int inputLength = pInputMotion->GetNumFrames(); // frames are indexed 0, ..., inputLength-1
+    const int step = N + 1;
+    const int numKeyFrames = (inputLength / step) + 1;
+
+    // prepare reduced posture for key frames
+    std::vector<ReducedPostureQuaternion> keyFrames;
+    keyFrames.reserve(numKeyFrames);
+
+    for (int i = 0; i < numKeyFrames; ++i)
+    {
+        keyFrames.emplace_back(*pInputMotion->GetPosture(i * (N + 1)));
+    }
+
+    // calculate Control points
+    struct ControlPoint
+    {
+        ReducedPostureQuaternion a;
+        ReducedPostureQuaternion b;
+    };
+
+    std::vector<ControlPoint> controlPoints;
+    controlPoints.reserve(numKeyFrames);
+
+    const double oneThird = 1.0 / 3.0;
+
+    for (int i = 0; i < numKeyFrames; ++i) {
+        ControlPoint cp{};
+
+        if (i == 0) {
+            const auto& q0 = keyFrames[0];
+            const auto& q1 = keyFrames[1];
+            const auto& q2 = keyFrames[2];
+            cp.a = ReducedPostureQuaternion::Interpolate(oneThird, q0, ReducedPostureQuaternion::Interpolate(2.0, q2, q1));
+        }
+        else if (i == numKeyFrames - 1) {
+            const auto& qn = keyFrames[i];
+            const auto& qn_1 = keyFrames[i - 1];
+            const auto& qn_2 = keyFrames[i - 2];
+            cp.b = ReducedPostureQuaternion::Interpolate(oneThird, qn, ReducedPostureQuaternion::Interpolate(2.0, qn_2, qn_1));
+        }
+        else {
+            const auto& q_prev = keyFrames[i - 1];
+            const auto& q_curr = keyFrames[i];
+            const auto& q_next = keyFrames[i + 1];
+
+            // a_bar = (1 - 0.5) * (q_curr + (q_curr - q_prev)) + 0.5 * q_next
+            ReducedPostureQuaternion a_bar = ReducedPostureQuaternion::Interpolate(0.5, ReducedPostureQuaternion::Interpolate(2.0, q_prev, q_curr), q_next);
+
+            cp.a = ReducedPostureQuaternion::Interpolate(oneThird, q_curr, a_bar);
+            cp.b = ReducedPostureQuaternion::Interpolate(-oneThird, q_curr, a_bar);
+        }
+        controlPoints.push_back(std::move(cp));
+    }
+
+    // interpolate between key frames
+    int startKeyframe = 0;
+    while (startKeyframe + N + 1 < inputLength)
+    {
+        int endKeyframe = startKeyframe + N + 1;
+
+        Posture* startPosture = pInputMotion->GetPosture(startKeyframe);
+        Posture* endPosture = pInputMotion->GetPosture(endKeyframe);
+
+        // copy start and end keyframe
+        pOutputMotion->SetPosture(startKeyframe, *startPosture);
+        pOutputMotion->SetPosture(endKeyframe, *endPosture);
+
+        // interpolate in between
+        for (int frame = 1; frame <= N; frame++)
+        {
+            int keyFrameIndex = startKeyframe / step;
+            Posture interpolatedPosture;
+            double t = 1.0 * frame / (N + 1);
+
+            // interpolate root position
+            interpolatedPosture.root_pos = DeCasteljauEuler(
+                t,
+                keyFrames[keyFrameIndex].root_pos,
+                controlPoints[keyFrameIndex].a.root_pos,
+                controlPoints[keyFrameIndex + 1].b.root_pos,
+                keyFrames[keyFrameIndex + 1].root_pos);
+
+            // interpolate bone rotations
+            for (int bone = 0; bone < MAX_BONES_IN_ASF_FILE; bone++)
+            {
+                interpolatedPosture.bone_rotation[bone] = DeCasteljauQuaternion(
+                    t,
+                    keyFrames[keyFrameIndex].bone_rotation[bone],
+                    controlPoints[keyFrameIndex].a.bone_rotation[bone],
+                    controlPoints[keyFrameIndex + 1].b.bone_rotation[bone],
+                    keyFrames[keyFrameIndex + 1].bone_rotation[bone]);
+            }
+
+            pOutputMotion->SetPosture(startKeyframe + frame, interpolatedPosture);
+        }
+
+        startKeyframe = endKeyframe;
+    }
+
+    for (int frame = startKeyframe + 1; frame < inputLength; frame++)
+    {
+        pOutputMotion->SetPosture(frame, *(pInputMotion->GetPosture(frame)));
+    }
 }
 
-void Interpolator::Euler2Quaternion(double angles[3], Quaternion<double> & q)
+void Interpolator::Euler2Quaternion(const double angles[3], Quaternion<double> & q)
 {
-  double R[9];
-  Euler2Rotation(angles, R);
-  q = Quaternion<double>::Matrix2Quaternion(R);
+    double R[9];
+    Euler2Rotation(angles, R);
+    q = Quaternion<double>::Matrix2Quaternion(R);
 }
 
 void Interpolator::Quaternion2Euler(Quaternion<double> & q, double angles[3])
@@ -330,12 +455,12 @@ void Interpolator::Quaternion2Euler(Quaternion<double> & q, double angles[3])
 	Rotation2Euler(R, angles);
 }
 
-vector Lerp(double t, const vector& a, const vector& b)
+vector Interpolator::Lerp(double t, const vector& a, const vector& b)
 {
     return a * (1 - t) + b * t;
 }
 
-Quaternion<double> Interpolator::Slerp(double t, Quaternion<double> & qStart, Quaternion<double> & qEnd_)
+Quaternion<double> Interpolator::Slerp(double t, const Quaternion<double> & qStart, const Quaternion<double> & qEnd_)
 {
     double cosTheta = qStart.Gets() * qEnd_.Gets() +
                       qStart.Getx() * qEnd_.Getx() +
@@ -371,6 +496,19 @@ Quaternion<double> Interpolator::Slerp(double t, Quaternion<double> & qStart, Qu
     return result;
 }
 
+const vector Interpolator::Slerp(double t, const vector& vStart_, const vector& vEnd_)
+{
+    vector vStart = vStart_;
+    vector vEnd = vEnd_;
+    Quaternion<double> qStartQuat, qEndQuat;
+    Euler2Quaternion(vStart.p, qStartQuat);
+    Euler2Quaternion(vEnd.p, qEndQuat);
+    Quaternion<double> qResult = Slerp(t, qStartQuat, qEndQuat);
+    vector vResult;
+    Quaternion2Euler(qResult, vResult.p);
+    return vResult;
+}
+
 Quaternion<double> Interpolator::Double(Quaternion<double> p, Quaternion<double> q)
 {
     double dot = p.Gets() * q.Gets() + p.Getx() * q.Getx() + p.Gety() * q.Gety() + p.Getz() * q.Getz();
@@ -390,7 +528,7 @@ vector Interpolator::DeCasteljauEuler(double t, vector p0, vector p1, vector p2,
     return result;
 }
 
-Quaternion<double> Interpolator::DeCasteljauQuaternion(double t, Quaternion<double> p0, Quaternion<double> p1, Quaternion<double> p2, Quaternion<double> p3)
+Quaternion<double> Interpolator::DeCasteljauQuaternion(double t, const Quaternion<double>& p0, const Quaternion<double>& p1, const Quaternion<double>& p2, const Quaternion<double>& p3)
 {
     auto q0 = Slerp(t, p0, p1);
     auto q1 = Slerp(t, p1, p2);
@@ -401,3 +539,22 @@ Quaternion<double> Interpolator::DeCasteljauQuaternion(double t, Quaternion<doub
     return result;
 }
 
+vector Interpolator::DeCasteljauQuaternion(double t, const vector& v0, const vector& v1, const vector& v2, const vector& v3)
+{
+    Quaternion<double> p0, p1, p2, p3;
+    Euler2Quaternion(v0.p, p0);
+    Euler2Quaternion(v1.p, p1);
+    Euler2Quaternion(v2.p, p2);
+    Euler2Quaternion(v3.p, p3);
+
+    auto q0 = Slerp(t, p0, p1);
+    auto q1 = Slerp(t, p1, p2);
+    auto q2 = Slerp(t, p2, p3);
+    auto r0 = Slerp(t, q0, q1);
+    auto r1 = Slerp(t, q1, q2);
+    auto qResult = Slerp(t, r0, r1);
+
+    vector vResult;
+	Quaternion2Euler(qResult, vResult.p);
+	return vResult;
+}
