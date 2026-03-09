@@ -9,6 +9,8 @@
 #include "interpolator.h"
 #include "types.h"
 
+#define DUMP_FRAME_ROTATION 0
+
 Interpolator::Interpolator()
 {
   //Set default interpolation type
@@ -85,6 +87,14 @@ void Interpolator::LinearInterpolationEuler(Motion * pInputMotion, Motion * pOut
   {
     pOutputMotion->SetPosture(frame, *(pInputMotion->GetPosture(frame)));
   }
+
+#if DUMP_FRAME_ROTATION
+  for (int frame = 200; frame < inputLength && frame <= 500; frame++)
+  {
+      const auto& posture = pOutputMotion->GetPosture(frame);
+      printf("%s(): %d: %.5lf\n", __FUNCTION__, frame, posture->bone_rotation[0].z());
+  }
+#endif // #if DUMP_FRAME_ROTATION
 }
 
 void Interpolator::Rotation2Euler(double R[9], double angles[3])
@@ -135,42 +145,29 @@ void Interpolator::Euler2Rotation(const double angles[3], double R[9])
 
 ///@note We don't use the entire Posture struct for interpolation, since bone_translation and bone_length are unused.
 ///      We create a reduced posture struct that only contains what we need for interpolation.
-struct ReducedPostureEuler
+struct ReducedPosture
 {
     vector root_pos;
     vector bone_rotation[MAX_BONES_IN_ASF_FILE];
 
-    ReducedPostureEuler(const Posture& p) {
+    ReducedPosture(const Posture& p) {
         root_pos = p.root_pos;
         std::copy(std::begin(p.bone_rotation), std::end(p.bone_rotation), std::begin(bone_rotation));
     }
 
-    ReducedPostureEuler() = default;
+    ReducedPosture() = default;
 
-    static ReducedPostureEuler Interpolate(double t, const ReducedPostureEuler& start, const ReducedPostureEuler& end) {
-        ReducedPostureEuler res;
+    static ReducedPosture InterpolateEuler(double t, const ReducedPosture& start, const ReducedPosture& end) {
+        ReducedPosture res;
         res.root_pos = Interpolator::Lerp(t, start.root_pos, end.root_pos);
         for (int i = 0; i < MAX_BONES_IN_ASF_FILE; ++i) {
             res.bone_rotation[i] = Interpolator::Lerp(t, start.bone_rotation[i], end.bone_rotation[i]);
         }
         return res;
     }
-};
 
-struct ReducedPostureQuaternion
-{
-    vector root_pos;
-    vector bone_rotation[MAX_BONES_IN_ASF_FILE];
-
-    ReducedPostureQuaternion(const Posture& p) {
-        root_pos = p.root_pos;
-        std::copy(std::begin(p.bone_rotation), std::end(p.bone_rotation), std::begin(bone_rotation));
-    }
-
-    ReducedPostureQuaternion() = default;
-
-    static ReducedPostureQuaternion Interpolate(double t, const ReducedPostureQuaternion& start, const ReducedPostureQuaternion& end) {
-        ReducedPostureQuaternion res;
+    static ReducedPosture InterpolateQuaternion(double t, const ReducedPosture& start, const ReducedPosture& end) {
+        ReducedPosture res;
         res.root_pos = Interpolator::Lerp(t, start.root_pos, end.root_pos);
         for (int i = 0; i < MAX_BONES_IN_ASF_FILE; ++i) {
             res.bone_rotation[i] = Interpolator::Slerp(t, start.bone_rotation[i], end.bone_rotation[i]);
@@ -186,7 +183,7 @@ void Interpolator::BezierInterpolationEuler(Motion * pInputMotion, Motion * pOut
     const int numKeyFrames = (inputLength / step) + 1;
 
     // prepare reduced posture for key frames
-    std::vector<ReducedPostureEuler> keyFrames;
+    std::vector<ReducedPosture> keyFrames;
     keyFrames.reserve(numKeyFrames);
 
     for (int i = 0; i < numKeyFrames; ++i)
@@ -197,8 +194,8 @@ void Interpolator::BezierInterpolationEuler(Motion * pInputMotion, Motion * pOut
     // calculate Control points
     struct ControlPoint
     {
-        ReducedPostureEuler a;
-        ReducedPostureEuler b;
+        ReducedPosture a;
+        ReducedPosture b;
     };
 
     std::vector<ControlPoint> controlPoints;
@@ -213,13 +210,13 @@ void Interpolator::BezierInterpolationEuler(Motion * pInputMotion, Motion * pOut
             const auto& q0 = keyFrames[0];
             const auto& q1 = keyFrames[1];
             const auto& q2 = keyFrames[2];
-            cp.a = ReducedPostureEuler::Interpolate(oneThird, q0, ReducedPostureEuler::Interpolate(2.0, q2, q1));
+            cp.a = ReducedPosture::InterpolateEuler(oneThird, q0, ReducedPosture::InterpolateEuler(2.0, q2, q1));
         }
         else if (i == numKeyFrames - 1) {
             const auto& qn = keyFrames[i];
             const auto& qn_1 = keyFrames[i - 1];
             const auto& qn_2 = keyFrames[i - 2];
-            cp.b = ReducedPostureEuler::Interpolate(oneThird, qn, ReducedPostureEuler::Interpolate(2.0, qn_2, qn_1));
+            cp.b = ReducedPosture::InterpolateEuler(oneThird, qn, ReducedPosture::InterpolateEuler(2.0, qn_2, qn_1));
         }
         else {
             const auto& q_prev = keyFrames[i - 1];
@@ -227,10 +224,10 @@ void Interpolator::BezierInterpolationEuler(Motion * pInputMotion, Motion * pOut
             const auto& q_next = keyFrames[i + 1];
 
             // a_bar = (1 - 0.5) * (q_curr + (q_curr - q_prev)) + 0.5 * q_next
-            ReducedPostureEuler a_bar = ReducedPostureEuler::Interpolate(0.5, ReducedPostureEuler::Interpolate(2.0, q_prev, q_curr), q_next);
+            ReducedPosture a_bar = ReducedPosture::InterpolateEuler(0.5, ReducedPosture::InterpolateEuler(2.0, q_prev, q_curr), q_next);
 
-            cp.a = ReducedPostureEuler::Interpolate(oneThird, q_curr, a_bar);
-            cp.b = ReducedPostureEuler::Interpolate(-oneThird, q_curr, a_bar);
+            cp.a = ReducedPosture::InterpolateEuler(oneThird, q_curr, a_bar);
+            cp.b = ReducedPosture::InterpolateEuler(-oneThird, q_curr, a_bar);
         }
         controlPoints.push_back(std::move(cp));
     }
@@ -284,6 +281,14 @@ void Interpolator::BezierInterpolationEuler(Motion * pInputMotion, Motion * pOut
     {
         pOutputMotion->SetPosture(frame, *(pInputMotion->GetPosture(frame)));
     }
+
+#if DUMP_FRAME_ROTATION
+    for (int frame = 200; frame < inputLength && frame <= 500; frame++)
+    {
+        const auto& posture = pOutputMotion->GetPosture(frame);
+        printf("%s(): %d: %.5lf\n", __FUNCTION__, frame, posture->bone_rotation[0].z());
+    }
+#endif // #if DUMP_FRAME_ROTATION
 }
 
 void Interpolator::LinearInterpolationQuaternion(Motion * pInputMotion, Motion * pOutputMotion, int N)
@@ -332,6 +337,14 @@ void Interpolator::LinearInterpolationQuaternion(Motion * pInputMotion, Motion *
     {
         pOutputMotion->SetPosture(frame, *(pInputMotion->GetPosture(frame)));
     }
+
+#if DUMP_FRAME_ROTATION
+    for (int frame = 200; frame < inputLength && frame <= 500; frame++)
+    {
+        const auto& posture = pOutputMotion->GetPosture(frame);
+        printf("%s(): %d: %.5lf\n", __FUNCTION__, frame, posture->bone_rotation[0].z());
+    }
+#endif // #if DUMP_FRAME_ROTATION
 }
 
 void Interpolator::BezierInterpolationQuaternion(Motion * pInputMotion, Motion * pOutputMotion, int N)
@@ -341,7 +354,7 @@ void Interpolator::BezierInterpolationQuaternion(Motion * pInputMotion, Motion *
     const int numKeyFrames = (inputLength / step) + 1;
 
     // prepare reduced posture for key frames
-    std::vector<ReducedPostureQuaternion> keyFrames;
+    std::vector<ReducedPosture> keyFrames;
     keyFrames.reserve(numKeyFrames);
 
     for (int i = 0; i < numKeyFrames; ++i)
@@ -352,8 +365,8 @@ void Interpolator::BezierInterpolationQuaternion(Motion * pInputMotion, Motion *
     // calculate Control points
     struct ControlPoint
     {
-        ReducedPostureQuaternion a;
-        ReducedPostureQuaternion b;
+        ReducedPosture a;
+        ReducedPosture b;
     };
 
     std::vector<ControlPoint> controlPoints;
@@ -368,13 +381,13 @@ void Interpolator::BezierInterpolationQuaternion(Motion * pInputMotion, Motion *
             const auto& q0 = keyFrames[0];
             const auto& q1 = keyFrames[1];
             const auto& q2 = keyFrames[2];
-            cp.a = ReducedPostureQuaternion::Interpolate(oneThird, q0, ReducedPostureQuaternion::Interpolate(2.0, q2, q1));
+            cp.a = ReducedPosture::InterpolateQuaternion(oneThird, q0, ReducedPosture::InterpolateQuaternion(2.0, q2, q1));
         }
         else if (i == numKeyFrames - 1) {
             const auto& qn = keyFrames[i];
             const auto& qn_1 = keyFrames[i - 1];
             const auto& qn_2 = keyFrames[i - 2];
-            cp.b = ReducedPostureQuaternion::Interpolate(oneThird, qn, ReducedPostureQuaternion::Interpolate(2.0, qn_2, qn_1));
+            cp.b = ReducedPosture::InterpolateQuaternion(oneThird, qn, ReducedPosture::InterpolateQuaternion(2.0, qn_2, qn_1));
         }
         else {
             const auto& q_prev = keyFrames[i - 1];
@@ -382,10 +395,10 @@ void Interpolator::BezierInterpolationQuaternion(Motion * pInputMotion, Motion *
             const auto& q_next = keyFrames[i + 1];
 
             // a_bar = (1 - 0.5) * (q_curr + (q_curr - q_prev)) + 0.5 * q_next
-            ReducedPostureQuaternion a_bar = ReducedPostureQuaternion::Interpolate(0.5, ReducedPostureQuaternion::Interpolate(2.0, q_prev, q_curr), q_next);
+            ReducedPosture a_bar = ReducedPosture::InterpolateQuaternion(0.5, ReducedPosture::InterpolateQuaternion(2.0, q_prev, q_curr), q_next);
 
-            cp.a = ReducedPostureQuaternion::Interpolate(oneThird, q_curr, a_bar);
-            cp.b = ReducedPostureQuaternion::Interpolate(-oneThird, q_curr, a_bar);
+            cp.a = ReducedPosture::InterpolateQuaternion(oneThird, q_curr, a_bar);
+            cp.b = ReducedPosture::InterpolateQuaternion(-oneThird, q_curr, a_bar);
         }
         controlPoints.push_back(std::move(cp));
     }
@@ -439,6 +452,14 @@ void Interpolator::BezierInterpolationQuaternion(Motion * pInputMotion, Motion *
     {
         pOutputMotion->SetPosture(frame, *(pInputMotion->GetPosture(frame)));
     }
+
+#if DUMP_FRAME_ROTATION
+    for (int frame = 200; frame < inputLength && frame <= 500; frame++)
+    {
+        const auto& posture = pOutputMotion->GetPosture(frame);
+        printf("%s(): %d: %.5lf\n", __FUNCTION__, frame, posture->bone_rotation[0].z());
+    }
+#endif // #if DUMP_FRAME_ROTATION
 }
 
 void Interpolator::Euler2Quaternion(const double angles[3], Quaternion<double> & q)
